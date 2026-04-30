@@ -97,7 +97,7 @@ export default function App() {
 
   useEffect(() => { setTimeout(() => setMounted(true), 100); }, []);
 
-  const API = "http://127.0.0.1:8000";
+  const API = "https://phoenix-ai-production.up.railway.app";
 
   const handleRegister = async () => {
     if (!email || !password) return setAuthMsg("Email aur password daalo!");
