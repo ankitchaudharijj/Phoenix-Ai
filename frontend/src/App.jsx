@@ -63,7 +63,7 @@ const SCAN_TABS = [
   ["live", "Live App", "Authenticated testing"],
 ];
 
-const ADMIN_SECRET = "phoenix_admin_2024";
+const ADMIN_SECRET = import.meta.env.VITE_ADMIN_SECRET || "";
 
 export default function App() {
   const [page, setPage] = useState("login");
@@ -166,7 +166,7 @@ export default function App() {
 
   // Admin functions
   const adminLogin = async () => {
-    if (adminSecret !== ADMIN_SECRET) return setAdminMsg("❌ Wrong secret key!");
+    if (adminSecret.trim() !== ADMIN_SECRET.trim()) return setAdminMsg("✗ Wrong secret key!");
     try {
       const res = await fetch(`${API}/admin/stats?secret=${adminSecret}`);
       if (res.ok) {
