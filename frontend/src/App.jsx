@@ -123,8 +123,6 @@ export default function App() {
 
   useEffect(() => { setTimeout(() => setMounted(true), 100); }, []);
 
-  const API = "https://phoenix-ai-production.up.railway.app";
-
   useEffect(() => {
     if (!loading) { setLoadingProgress(0); return; }
     const msgs = loadingMessages[scanTab] || loadingMessages.url;
