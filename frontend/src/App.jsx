@@ -49,9 +49,21 @@ function Particles() {
 }
 
 const PLANS = [
-  { name: "Free", price: "₹0", period: "forever", color: T.stoneGray, features: ["5 scans/month", "URL scanner only", "Basic report", "Community support"] },
-  { name: "Pro", price: "₹499", period: "/month", color: T.terracotta, features: ["Unlimited scans", "All 6 scanner types", "AI explanation", "PDF reports", "Priority support"], popular: true },
-  { name: "Enterprise", price: "₹4,999", period: "/month", color: T.charcoalWarm, features: ["Everything in Pro", "Team access (10 users)", "Custom branding", "API access", "Dedicated support"] }
+  {
+    name: "Free", price: "₹0", period: "forever", color: T.stoneGray,
+    features: ["3 scans/month", "URL scanner only", "Basic report", "Community support"],
+    limits: { scans: 3, scanners: ["url"] }
+  },
+  {
+    name: "Pro", price: "₹499", period: "/month", color: T.terracotta, popular: true,
+    features: ["Unlimited scans", "All 6 scanner types", "Full PDF reports", "AI explanation", "Priority support", "Verified by Phoenix AI"],
+    limits: { scans: -1, scanners: ["url","code","zip","api","threat","live"] }
+  },
+  {
+    name: "Enterprise", price: "₹4,999", period: "/month", color: T.charcoalWarm,
+    features: ["Everything in Pro", "Team access (5 users)", "API access", "Dedicated support", "Custom branding", "Compliance reports"],
+    limits: { scans: -1, scanners: ["url","code","zip","api","threat","live"] }
+  }
 ];
 
 const SCAN_TABS = [
@@ -63,7 +75,16 @@ const SCAN_TABS = [
   ["live", "Live App", "Authenticated testing"],
 ];
 
-const ADMIN_SECRET = import.meta.env.VITE_ADMIN_SECRET || "";
+const ADMIN_SECRET = "phoenix_admin_2024";
+
+const loadingMessages = {
+  url: ["Checking security headers…","Testing SSL certificate…","Scanning for SQL injection…","Checking XSS vulnerabilities…","Scanning open ports…","Looking for sensitive files…"],
+  code: ["Parsing source code…","Detecting hardcoded secrets…","Checking for injection risks…","Analyzing crypto usage…","Scanning for API keys…"],
+  zip: ["Extracting ZIP archive…","Scanning Python files…","Scanning JavaScript files…","Checking for secrets…","Analyzing all files…"],
+  api: ["Testing API endpoints…","Checking authentication…","Testing for IDOR…","Scanning GraphQL schema…"],
+  threat: ["Resolving IP address…","Checking AbuseIPDB…","Scanning blacklists…","Enumerating subdomains…","Checking CVE database…"],
+  live: ["Starting authenticated session…","Testing CSRF tokens…","Checking cookie security…","Testing rate limiting…","Scanning for IDOR…"],
+};
 
 export default function App() {
   const [page, setPage] = useState("login");
@@ -71,6 +92,7 @@ export default function App() {
   const [password, setPassword] = useState("");
   const [user, setUser] = useState(null);
   const [userPlan, setUserPlan] = useState("Free");
+  const [monthlyScans, setMonthlyScans] = useState(0);
   const [url, setUrl] = useState("");
   const [code, setCode] = useState("");
   const [zipFile, setZipFile] = useState(null);
@@ -81,12 +103,16 @@ export default function App() {
   const [result, setResult] = useState(null);
   const [scanId, setScanId] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [loadingMsg, setLoadingMsg] = useState("");
+  const [loadingProgress, setLoadingProgress] = useState(0);
   const [authMsg, setAuthMsg] = useState("");
   const [history, setHistory] = useState([]);
   const [activePage, setActivePage] = useState("scan");
   const [mounted, setMounted] = useState(false);
+  const [showUpgrade, setShowUpgrade] = useState(false);
+  const [upgradeReason, setUpgradeReason] = useState("");
 
-  // Admin states
+  // Admin
   const [adminSecret, setAdminSecret] = useState("");
   const [adminLoggedIn, setAdminLoggedIn] = useState(false);
   const [adminStats, setAdminStats] = useState(null);
@@ -97,7 +123,30 @@ export default function App() {
 
   useEffect(() => { setTimeout(() => setMounted(true), 100); }, []);
 
-  const API = "https://phoenix-ai-production.up.railway.app";
+  useEffect(() => {
+    if (!loading) { setLoadingProgress(0); return; }
+    const msgs = loadingMessages[scanTab] || loadingMessages.url;
+    let i = 0; let progress = 0;
+    setLoadingMsg(msgs[0]);
+    const msgInt = setInterval(() => { i = (i + 1) % msgs.length; setLoadingMsg(msgs[i]); }, 3000);
+    const progInt = setInterval(() => { progress = Math.min(progress + Math.random() * 8, 90); setLoadingProgress(progress); }, 800);
+    return () => { clearInterval(msgInt); clearInterval(progInt); };
+  }, [loading, scanTab]);
+
+  const API = "http://127.0.0.1:8000";
+
+  const getPlanObj = (planName) => {
+  const normalized = planName?.toUpperCase();
+  if (normalized === "PRO") return PLANS[1];
+  if (normalized === "ENTERPRISE") return PLANS[2];
+  return PLANS[0];
+};
+  const canUseScanType = (tab) => getPlanObj(userPlan).limits.scanners.includes(tab);
+  const isLimitReached = () => {
+  const normalized = userPlan?.toUpperCase();
+  if (normalized === "PRO" || normalized === "ENTERPRISE") return false;
+  return monthlyScans >= 3;
+};
 
   const handleRegister = async () => {
     if (!email || !password) return setAuthMsg("Email aur password daalo!");
@@ -114,8 +163,11 @@ export default function App() {
     try {
       const res = await fetch(`${API}/login`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, password }) });
       const data = await res.json();
-      if (res.ok) { setUser(data); setUserPlan(data.plan || "Free"); setPage("dashboard"); setAuthMsg(""); }
-      else setAuthMsg("❌ " + data.detail);
+      if (res.ok) {
+        setUser(data); setUserPlan(data.plan || "Free");
+        setMonthlyScans(data.monthly_scan_count || 0);
+        setPage("dashboard"); setAuthMsg("");
+      } else setAuthMsg("❌ " + data.detail);
     } catch { setAuthMsg("❌ Server error!"); }
   };
 
@@ -126,6 +178,18 @@ export default function App() {
     if (scanTab === "threat" && !url) return alert("URL ya IP daalo!");
     if (scanTab === "live" && !url) return alert("App URL daalo!");
     if (scanTab === "api" && !url) return alert("API URL daalo!");
+
+    if (!canUseScanType(scanTab)) {
+      setUpgradeReason("scanner");
+      setShowUpgrade(true);
+      return;
+    }
+    if (isLimitReached()) {
+      setUpgradeReason("limit");
+      setShowUpgrade(true);
+      return;
+    }
+
     setLoading(true); setResult(null); setScanId(null);
     try {
       let data;
@@ -138,19 +202,32 @@ export default function App() {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ target: scanTab !== "code" ? url : "Source Code Scan", scan_type: scanTab, code, login_url: loginUrl, login_email: loginEmail, login_password: loginPass, user_id: user?.user_id || 0 })
         });
+        if (res.status === 429 || res.status === 403) {
+          setUpgradeReason(res.status === 429 ? "limit" : "scanner");
+          setShowUpgrade(true); setLoading(false); return;
+        }
         data = await res.json();
       }
-      setResult(data.result); setScanId(data.scan_id);
-    } catch { alert("Backend chal raha hai?"); }
-    setLoading(false);
+      setLoadingProgress(100);
+      if (userPlan === "Free") setMonthlyScans(prev => prev + 1);
+      setTimeout(async () => {
+  setResult(data.result);
+  setScanId(data.scan_id);
+  setLoading(false);
+  // Fresh count backend se lo
+  if (user?.user_id) {
+    try {
+      const countRes = await fetch(`${API}/user/scan-count?user_id=${user.user_id}`);
+      const countData = await countRes.json();
+      setMonthlyScans(countData.monthly_scan_count || 0);
+    } catch {}
+  }
+}, 500);
+    } catch { alert("Backend chal raha hai?"); setLoading(false); }
   };
 
   const loadHistory = async () => {
-    try {
-      const res = await fetch(`${API}/scans`);
-      const data = await res.json();
-      setHistory(data.scans || []);
-    } catch { }
+    try { const res = await fetch(`${API}/scans`); const data = await res.json(); setHistory(data.scans || []); } catch { }
   };
 
   const downloadReport = async (r, t, sid) => {
@@ -164,51 +241,92 @@ export default function App() {
     const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([c], { type: "text/plain" })); a.download = `phoenix-ai-${Date.now()}.txt`; a.click();
   };
 
-  // Admin functions
   const adminLogin = async () => {
-    if (adminSecret.trim() !== ADMIN_SECRET.trim()) return setAdminMsg("✗ Wrong secret key!");
+    if (adminSecret !== ADMIN_SECRET) return setAdminMsg("❌ Wrong secret key!");
     try {
       const res = await fetch(`${API}/admin/stats?secret=${adminSecret}`);
-      if (res.ok) {
-        const data = await res.json();
-        setAdminStats(data); setAdminLoggedIn(true); setAdminMsg("");
-        loadAdminUsers(); loadAdminScans();
-      } else setAdminMsg("❌ Access denied!");
+      if (res.ok) { const data = await res.json(); setAdminStats(data); setAdminLoggedIn(true); setAdminMsg(""); loadAdminUsers(); loadAdminScans(); }
+      else setAdminMsg("❌ Access denied!");
     } catch { setAdminMsg("❌ Server error!"); }
   };
 
   const loadAdminUsers = async () => {
-    try {
-      const res = await fetch(`${API}/admin/users?secret=${ADMIN_SECRET}`);
-      const data = await res.json();
-      setAdminUsers(data.users || []);
-    } catch { }
+    try { const res = await fetch(`${API}/admin/users?secret=${ADMIN_SECRET}`); const data = await res.json(); setAdminUsers(data.users || []); } catch { }
   };
 
+  const deleteUser = async (userId, email) => {
+  if (!window.confirm(`Delete user ${email}? This cannot be undone!`)) return;
+  try {
+    const res = await fetch(`${API}/admin/delete-user?user_id=${userId}&secret=${ADMIN_SECRET}`, { method: "DELETE" });
+    if (res.ok) { alert("✅ User deleted!"); loadAdminUsers(); }
+    else alert("❌ Error deleting user");
+  } catch { alert("❌ Server error!"); }
+};
+
   const loadAdminScans = async () => {
-    try {
-      const res = await fetch(`${API}/admin/scans?secret=${ADMIN_SECRET}`);
-      const data = await res.json();
-      setAdminScans(data.scans || []);
-    } catch { }
+    try { const res = await fetch(`${API}/admin/scans?secret=${ADMIN_SECRET}`); const data = await res.json(); setAdminScans(data.scans || []); } catch { }
   };
 
   const updateUserPlan = async (userId, plan) => {
     try {
-      const res = await fetch(`${API}/admin/update-plan`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ user_id: userId, plan, admin_secret: ADMIN_SECRET })
-      });
-      const data = await res.json();
+      const res = await fetch(`${API}/admin/update-plan`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ user_id: userId, plan, admin_secret: ADMIN_SECRET }) });
       if (res.ok) { alert(`✅ Plan updated to ${plan}`); loadAdminUsers(); }
-    } catch { alert("Error updating plan"); }
+    } catch { alert("Error!"); }
   };
 
   const sColor = (s) => s === "CRITICAL" ? "#b53333" : s === "HIGH" ? "#c96442" : s === "MEDIUM" ? "#87867f" : "#b0aea5";
-
   const inputStyle = { width: "100%", padding: "12px 16px", background: T.ivory, border: `1px solid ${T.borderWarm}`, borderRadius: 12, color: T.nearBlack, fontSize: 15, outline: "none", marginBottom: 14, fontFamily: "system-ui, sans-serif", boxSizing: "border-box" };
   const darkInputStyle = { ...inputStyle, background: "rgba(250,249,245,0.06)", border: `1px solid ${T.borderDark}`, color: T.ivory };
   const labelStyle = { display: "block", fontSize: 11, fontFamily: "system-ui, sans-serif", color: T.stoneGray, letterSpacing: "0.5px", marginBottom: 6, textTransform: "uppercase" };
+
+  // ── UPGRADE MODAL ──
+  const UpgradeModal = () => (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(20,20,19,0.85)", backdropFilter: "blur(8px)", zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      <div style={{ background: T.ivory, borderRadius: 24, padding: "48px 40px", maxWidth: 500, width: "100%", textAlign: "center", boxShadow: "rgba(0,0,0,0.25) 0px 24px 64px" }}>
+        <div style={{ width: 64, height: 64, borderRadius: "50%", background: T.warmSand, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 24px", fontSize: 28 }}>🔒</div>
+        <div style={{ fontSize: 11, color: T.terracotta, letterSpacing: "0.5px", textTransform: "uppercase", marginBottom: 12 }}>
+          {upgradeReason === "limit" ? "Monthly limit reached" : "Feature locked"}
+        </div>
+        <h2 style={{ fontSize: 28, fontWeight: 500, color: T.nearBlack, margin: "0 0 12px", fontFamily: "Georgia, serif", lineHeight: 1.2 }}>
+          {upgradeReason === "limit" ? "You've used all 3 free scans this month" : "This scanner requires Pro or Enterprise"}
+        </h2>
+        <p style={{ fontSize: 15, color: T.oliveGray, margin: "0 0 32px", lineHeight: 1.6 }}>
+          {upgradeReason === "limit"
+            ? "Your free plan includes 3 scans per month. Upgrade to Pro for unlimited scans, all scanner types, and full PDF reports."
+            : "URL scanner is available on Free plan. Upgrade to Pro to access Code, ZIP, API, Threat Intel, and Live App scanners."}
+        </p>
+
+        {/* Plan comparison */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 28 }}>
+          {[
+            { name: "Pro", price: "₹499/mo", color: T.terracotta, features: ["Unlimited scans", "All 6 scanners", "Full PDF reports", "AI analysis", "Priority support"] },
+            { name: "Enterprise", price: "₹4,999/mo", color: T.charcoalWarm, features: ["Everything in Pro", "5 team members", "API access", "Dedicated support"] }
+          ].map(plan => (
+            <div key={plan.name} style={{ background: T.parchment, border: `1px solid ${T.borderWarm}`, borderRadius: 14, padding: 20, textAlign: "left" }}>
+              <div style={{ fontSize: 16, fontWeight: 500, color: plan.color, fontFamily: "Georgia, serif", marginBottom: 4 }}>{plan.name}</div>
+              <div style={{ fontSize: 13, color: T.stoneGray, marginBottom: 12 }}>{plan.price}</div>
+              {plan.features.map((f, i) => (
+                <div key={i} style={{ display: "flex", gap: 8, marginBottom: 6, fontSize: 12, color: T.oliveGray }}>
+                  <span style={{ color: T.terracotta }}>✓</span>{f}
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+
+        <div style={{ display: "flex", gap: 12, justifyContent: "center" }}>
+          <button onClick={() => setShowUpgrade(false)}
+            style={{ padding: "11px 24px", background: T.warmSand, border: `1px solid ${T.borderWarm}`, borderRadius: 10, color: T.charcoalWarm, cursor: "pointer", fontSize: 14, fontFamily: "inherit" }}>
+            Maybe later
+          </button>
+          <button onClick={() => { setShowUpgrade(false); setActivePage("plans"); }}
+            style={{ padding: "11px 28px", background: T.terracotta, border: "none", borderRadius: 10, color: T.ivory, cursor: "pointer", fontSize: 15, fontFamily: "Georgia, serif", fontWeight: 500 }}>
+            Upgrade now →
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 
   // ── AUTH ──
   if (page === "login" || page === "register") {
@@ -218,8 +336,6 @@ export default function App() {
         <Particles />
         <div style={{ position: "fixed", top: "20%", left: "10%", width: 600, height: 600, background: "radial-gradient(circle, rgba(201,100,66,0.06) 0%, transparent 70%)", pointerEvents: "none", zIndex: 0 }} />
         <div style={{ position: "relative", zIndex: 1, display: "flex", minHeight: "100vh" }}>
-
-          {/* Left Branding */}
           <div style={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center", padding: "80px 72px", borderRight: `1px solid ${T.borderDark}` }}>
             <div style={{ opacity: mounted ? 1 : 0, transform: mounted ? "translateY(0)" : "translateY(24px)", transition: "all 0.7s ease" }}>
               <div style={{ fontSize: 13, fontFamily: "system-ui", color: T.terracotta, letterSpacing: "0.5px", marginBottom: 24, textTransform: "uppercase" }}>AI Security Platform</div>
@@ -237,8 +353,6 @@ export default function App() {
               ))}
             </div>
           </div>
-
-          {/* Right Form */}
           <div style={{ width: 480, display: "flex", flexDirection: "column", justifyContent: "center", padding: "60px 56px", background: "rgba(20,20,19,0.9)", backdropFilter: "blur(20px)" }}>
             <div style={{ opacity: mounted ? 1 : 0, transition: "all 0.6s ease 0.2s" }}>
               <h2 style={{ fontSize: 32, fontWeight: 500, color: T.ivory, margin: 0, marginBottom: 8, fontFamily: "Georgia, serif" }}>{isLogin ? "Welcome back" : "Create account"}</h2>
@@ -294,7 +408,6 @@ export default function App() {
   if (page === "admin" && adminLoggedIn) {
     return (
       <div style={{ minHeight: "100vh", background: T.parchment, fontFamily: "system-ui, sans-serif" }}>
-        {/* Admin Navbar */}
         <nav style={{ background: T.nearBlack, borderBottom: `1px solid ${T.borderDark}`, padding: "0 32px", height: 60, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div style={{ fontSize: 20, fontWeight: 500, fontFamily: "Georgia, serif", color: T.ivory }}>
             Phoenix <span style={{ color: T.terracotta }}>AI</span>
@@ -309,55 +422,35 @@ export default function App() {
             ))}
           </div>
           <button onClick={() => { setAdminLoggedIn(false); setPage("login"); }}
-            style={{ padding: "7px 16px", background: "transparent", border: `1px solid ${T.borderDark}`, borderRadius: 8, color: T.stoneGray, cursor: "pointer", fontSize: 13, fontFamily: "inherit" }}>
+            style={{ padding: "7px 16px", background: "transparent", border: `1px solid ${T.borderDark}`, borderRadius: 8, color: T.stoneGray, cursor: "pointer", fontSize: 13 }}>
             Sign out
           </button>
         </nav>
-
         <main style={{ maxWidth: 1200, margin: "0 auto", padding: "40px 32px" }}>
-
-          {/* OVERVIEW */}
           {adminTab === "overview" && adminStats && (
             <div>
               <div style={{ marginBottom: 40 }}>
                 <div style={{ fontSize: 12, color: T.terracotta, letterSpacing: "0.5px", textTransform: "uppercase", marginBottom: 12 }}>Overview</div>
                 <h1 style={{ fontSize: 48, fontWeight: 500, color: T.nearBlack, margin: 0, fontFamily: "Georgia, serif", letterSpacing: "-1px" }}>Dashboard</h1>
               </div>
-
-              {/* Stats Grid */}
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 16, marginBottom: 32 }}>
-                {[
-                  ["Total Users", adminStats.total_users, T.nearBlack],
-                  ["Total Scans", adminStats.total_scans, T.charcoalWarm],
-                  ["Pro Users", adminStats.pro_users, T.terracotta],
-                  ["Enterprise", adminStats.enterprise_users, T.charcoalWarm],
-                  ["Free Users", adminStats.free_users, T.oliveGray],
-                  ["Scans This Week", adminStats.scans_this_week, T.charcoalWarm],
-                  ["New Users (7d)", adminStats.new_users_week, T.oliveGray],
-                  ["Est. Revenue", `₹${adminStats.estimated_revenue?.toLocaleString()}`, "#2d6a4f"],
-                ].map(([l, v, c]) => (
-                  <div key={l} style={{ background: T.ivory, border: `1px solid ${T.borderCream}`, borderRadius: 14, padding: "20px 24px", boxShadow: "rgba(0,0,0,0.03) 0px 2px 8px" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 16, marginBottom: 32 }}>
+                {[["Total Users", adminStats.total_users], ["Total Scans", adminStats.total_scans], ["Pro Users", adminStats.pro_users], ["Enterprise", adminStats.enterprise_users], ["Free Users", adminStats.free_users], ["Scans This Week", adminStats.scans_this_week], ["New Users (7d)", adminStats.new_users_week], ["Est. Revenue", `₹${(adminStats.estimated_revenue || 0).toLocaleString()}`]].map(([l, v]) => (
+                  <div key={l} style={{ background: T.ivory, border: `1px solid ${T.borderCream}`, borderRadius: 14, padding: "20px 24px" }}>
                     <div style={{ fontSize: 11, color: T.stoneGray, letterSpacing: "0.5px", textTransform: "uppercase", marginBottom: 10 }}>{l}</div>
-                    <div style={{ fontSize: 32, fontWeight: 500, color: c, fontFamily: "Georgia, serif", lineHeight: 1 }}>{v}</div>
+                    <div style={{ fontSize: 32, fontWeight: 500, color: T.nearBlack, fontFamily: "Georgia, serif", lineHeight: 1 }}>{v}</div>
                   </div>
                 ))}
               </div>
-
-              {/* Plan Distribution */}
-              <div style={{ background: T.ivory, border: `1px solid ${T.borderCream}`, borderRadius: 16, padding: 28, boxShadow: "rgba(0,0,0,0.03) 0px 2px 8px" }}>
+              <div style={{ background: T.ivory, border: `1px solid ${T.borderCream}`, borderRadius: 16, padding: 28 }}>
                 <div style={{ fontSize: 16, fontWeight: 500, color: T.nearBlack, fontFamily: "Georgia, serif", marginBottom: 20 }}>Plan Distribution</div>
-                {[
-                  ["Free", adminStats.free_users, adminStats.total_users, T.oliveGray],
-                  ["Pro", adminStats.pro_users, adminStats.total_users, T.terracotta],
-                  ["Enterprise", adminStats.enterprise_users, adminStats.total_users, T.charcoalWarm],
-                ].map(([plan, count, total, color]) => (
+                {[["Free", adminStats.free_users, T.oliveGray], ["Pro", adminStats.pro_users, T.terracotta], ["Enterprise", adminStats.enterprise_users, T.charcoalWarm]].map(([plan, count, color]) => (
                   <div key={plan} style={{ marginBottom: 16 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
                       <span style={{ fontSize: 14, color: T.charcoalWarm }}>{plan}</span>
-                      <span style={{ fontSize: 14, color: T.stoneGray }}>{count} users ({total > 0 ? Math.round(count / total * 100) : 0}%)</span>
+                      <span style={{ fontSize: 14, color: T.stoneGray }}>{count} ({adminStats.total_users > 0 ? Math.round(count / adminStats.total_users * 100) : 0}%)</span>
                     </div>
                     <div style={{ height: 8, background: T.warmSand, borderRadius: 4, overflow: "hidden" }}>
-                      <div style={{ height: "100%", width: `${total > 0 ? (count / total * 100) : 0}%`, background: color, borderRadius: 4, transition: "width 0.5s ease" }} />
+                      <div style={{ height: "100%", width: `${adminStats.total_users > 0 ? (count / adminStats.total_users * 100) : 0}%`, background: color, borderRadius: 4, transition: "width 0.5s ease" }} />
                     </div>
                   </div>
                 ))}
@@ -365,48 +458,36 @@ export default function App() {
             </div>
           )}
 
-          {/* USERS */}
           {adminTab === "users" && (
             <div>
               <div style={{ marginBottom: 32 }}>
                 <div style={{ fontSize: 12, color: T.terracotta, letterSpacing: "0.5px", textTransform: "uppercase", marginBottom: 12 }}>Users</div>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
-                  <h1 style={{ fontSize: 48, fontWeight: 500, color: T.nearBlack, margin: 0, fontFamily: "Georgia, serif", letterSpacing: "-1px" }}>All Users</h1>
-                  <span style={{ fontSize: 14, color: T.stoneGray }}>{adminUsers.length} total</span>
-                </div>
+                <h1 style={{ fontSize: 48, fontWeight: 500, color: T.nearBlack, margin: 0, fontFamily: "Georgia, serif", letterSpacing: "-1px" }}>All Users</h1>
               </div>
-
-              <div style={{ background: T.ivory, border: `1px solid ${T.borderCream}`, borderRadius: 16, overflow: "hidden", boxShadow: "rgba(0,0,0,0.03) 0px 2px 8px" }}>
-                {/* Table Header */}
+              <div style={{ background: T.ivory, border: `1px solid ${T.borderCream}`, borderRadius: 16, overflow: "hidden" }}>
                 <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr 1fr 1.5fr", padding: "12px 24px", background: T.warmSand, borderBottom: `1px solid ${T.borderCream}` }}>
                   {["Email", "Plan", "Scans", "Expires", "Last Login", "Actions"].map(h => (
                     <div key={h} style={{ fontSize: 11, color: T.stoneGray, letterSpacing: "0.5px", textTransform: "uppercase", fontWeight: 500 }}>{h}</div>
                   ))}
                 </div>
-
-                {adminUsers.length === 0 && (
-                  <div style={{ padding: "40px", textAlign: "center", color: T.stoneGray }}>No users yet</div>
-                )}
-
+                {adminUsers.length === 0 && <div style={{ padding: "40px", textAlign: "center", color: T.stoneGray }}>No users yet</div>}
                 {adminUsers.map((u, i) => (
                   <div key={i} style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr 1fr 1.5fr", padding: "16px 24px", borderBottom: i < adminUsers.length - 1 ? `1px solid ${T.borderCream}` : "none", alignItems: "center" }}>
                     <div>
                       <div style={{ fontSize: 14, color: T.nearBlack, fontWeight: 500 }}>{u.email}</div>
-                      <div style={{ fontSize: 11, color: T.stoneGray, marginTop: 2 }}>ID: {u.id}</div>
+                      <div style={{ fontSize: 11, color: T.stoneGray, marginTop: 2 }}>ID: {u.id} · {u.monthly_scan_count || 0} scans this month</div>
                     </div>
-                    <div>
-                      <span style={{ fontSize: 12, padding: "3px 10px", background: u.plan === "PRO" ? "rgba(201,100,66,0.1)" : u.plan === "ENTERPRISE" ? "rgba(77,76,72,0.1)" : T.warmSand, border: `1px solid ${u.plan === "PRO" ? "rgba(201,100,66,0.3)" : T.borderWarm}`, color: u.plan === "PRO" ? T.terracotta : T.charcoalWarm, borderRadius: 20, fontWeight: 500 }}>
-                        {u.plan || "FREE"}
-                      </span>
-                    </div>
+                    <span style={{ fontSize: 12, padding: "3px 10px", background: u.plan === "PRO" ? "rgba(201,100,66,0.1)" : u.plan === "ENTERPRISE" ? "rgba(77,76,72,0.1)" : T.warmSand, border: `1px solid ${u.plan === "PRO" ? "rgba(201,100,66,0.3)" : T.borderWarm}`, color: u.plan === "PRO" ? T.terracotta : T.charcoalWarm, borderRadius: 20, fontWeight: 500, display: "inline-block" }}>
+                      {u.plan || "FREE"}
+                    </span>
                     <div style={{ fontSize: 14, color: T.charcoalWarm }}>{u.scan_count || 0}</div>
-                    <div style={{ fontSize: 12, color: u.plan_expires ? T.charcoalWarm : T.stoneGray }}>
-                      {u.plan_expires ? u.plan_expires.slice(0, 10) : "—"}
-                    </div>
-                    <div style={{ fontSize: 12, color: T.stoneGray }}>
-                      {u.last_login ? u.last_login.slice(0, 10) : "Never"}
-                    </div>
+                    <div style={{ fontSize: 12, color: T.stoneGray }}>{u.plan_expires ? u.plan_expires.slice(0, 10) : "—"}</div>
+                    <div style={{ fontSize: 12, color: T.stoneGray }}>{u.last_login ? u.last_login.slice(0, 10) : "Never"}</div>
                     <div style={{ display: "flex", gap: 6 }}>
+                    <button onClick={() => deleteUser(u.id, u.email)}
+  style={{ padding: "4px 8px", background: "rgba(181,51,51,0.1)", border: "1px solid rgba(181,51,51,0.3)", borderRadius: 6, color: T.errorCrimson, cursor: "pointer", fontSize: 10, fontFamily: "inherit", fontWeight: 500, marginRight: 4 }}>
+  Del
+</button>
                       {["FREE", "PRO", "ENTERPRISE"].map(plan => (
                         <button key={plan} onClick={() => updateUserPlan(u.id, plan)}
                           style={{ padding: "4px 8px", background: (u.plan || "FREE") === plan ? T.terracotta : T.warmSand, border: `1px solid ${(u.plan || "FREE") === plan ? T.terracotta : T.borderWarm}`, borderRadius: 6, color: (u.plan || "FREE") === plan ? T.ivory : T.charcoalWarm, cursor: "pointer", fontSize: 10, fontFamily: "inherit", fontWeight: 500 }}>
@@ -420,36 +501,23 @@ export default function App() {
             </div>
           )}
 
-          {/* SCANS */}
           {adminTab === "scans" && (
             <div>
               <div style={{ marginBottom: 32 }}>
                 <div style={{ fontSize: 12, color: T.terracotta, letterSpacing: "0.5px", textTransform: "uppercase", marginBottom: 12 }}>Activity</div>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
-                  <h1 style={{ fontSize: 48, fontWeight: 500, color: T.nearBlack, margin: 0, fontFamily: "Georgia, serif", letterSpacing: "-1px" }}>All Scans</h1>
-                  <span style={{ fontSize: 14, color: T.stoneGray }}>{adminScans.length} recent</span>
-                </div>
+                <h1 style={{ fontSize: 48, fontWeight: 500, color: T.nearBlack, margin: 0, fontFamily: "Georgia, serif", letterSpacing: "-1px" }}>All Scans</h1>
               </div>
-
-              <div style={{ background: T.ivory, border: `1px solid ${T.borderCream}`, borderRadius: 16, overflow: "hidden", boxShadow: "rgba(0,0,0,0.03) 0px 2px 8px" }}>
+              <div style={{ background: T.ivory, border: `1px solid ${T.borderCream}`, borderRadius: 16, overflow: "hidden" }}>
                 <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1.5fr", padding: "12px 24px", background: T.warmSand, borderBottom: `1px solid ${T.borderCream}` }}>
                   {["Target", "Type", "User", "Date"].map(h => (
                     <div key={h} style={{ fontSize: 11, color: T.stoneGray, letterSpacing: "0.5px", textTransform: "uppercase", fontWeight: 500 }}>{h}</div>
                   ))}
                 </div>
-
-                {adminScans.length === 0 && (
-                  <div style={{ padding: "40px", textAlign: "center", color: T.stoneGray }}>No scans yet</div>
-                )}
-
+                {adminScans.length === 0 && <div style={{ padding: "40px", textAlign: "center", color: T.stoneGray }}>No scans yet</div>}
                 {adminScans.map((s, i) => (
                   <div key={i} style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1.5fr", padding: "14px 24px", borderBottom: i < adminScans.length - 1 ? `1px solid ${T.borderCream}` : "none", alignItems: "center" }}>
                     <div style={{ fontSize: 14, color: T.nearBlack, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.target}</div>
-                    <div>
-                      <span style={{ fontSize: 11, padding: "2px 8px", background: T.warmSand, border: `1px solid ${T.borderWarm}`, color: T.charcoalWarm, borderRadius: 20, textTransform: "uppercase", letterSpacing: "0.3px" }}>
-                        {s.type}
-                      </span>
-                    </div>
+                    <span style={{ fontSize: 11, padding: "2px 8px", background: T.warmSand, border: `1px solid ${T.borderWarm}`, color: T.charcoalWarm, borderRadius: 20, textTransform: "uppercase", letterSpacing: "0.3px", display: "inline-block" }}>{s.type}</span>
                     <div style={{ fontSize: 13, color: T.oliveGray }}>{s.user || "Anonymous"}</div>
                     <div style={{ fontSize: 12, color: T.stoneGray }}>{s.date?.slice(0, 16).replace("T", " ")}</div>
                   </div>
@@ -457,7 +525,6 @@ export default function App() {
               </div>
             </div>
           )}
-
         </main>
       </div>
     );
@@ -466,6 +533,7 @@ export default function App() {
   // ── MAIN DASHBOARD ──
   return (
     <div style={{ minHeight: "100vh", background: T.parchment, fontFamily: "system-ui, sans-serif" }}>
+      {showUpgrade && <UpgradeModal />}
 
       {/* NAVBAR */}
       <nav style={{ position: "sticky", top: 0, zIndex: 100, background: T.ivory, borderBottom: `1px solid ${T.borderCream}`, boxShadow: "rgba(0,0,0,0.04) 0px 2px 12px" }}>
@@ -482,8 +550,18 @@ export default function App() {
             ))}
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            <span style={{ fontSize: 14, color: T.oliveGray }}>{user?.email}</span>
-            <span style={{ fontSize: 11, padding: "3px 10px", background: T.warmSand, border: `1px solid ${T.borderWarm}`, color: T.charcoalWarm, borderRadius: 20, fontWeight: 500, letterSpacing: "0.3px" }}>{userPlan.toUpperCase()}</span>
+            {userPlan?.toUpperCase() === "FREE" && (
+              <div style={{ fontSize: 12, color: T.stoneGray, background: T.parchment, border: `1px solid ${T.borderWarm}`, borderRadius: 20, padding: "4px 12px" }}>
+                <span style={{ color: monthlyScans >= 3 ? T.errorCrimson : T.terracotta, fontWeight: 500 }}>{monthlyScans}</span>
+                <span>/3 scans</span>
+              </div>
+            )}
+            {(userPlan?.toUpperCase() === "PRO") && (
+              <div style={{ fontSize: 11, color: T.terracotta, background: "rgba(201,100,66,0.08)", border: `1px solid rgba(201,100,66,0.2)`, borderRadius: 20, padding: "4px 12px", fontWeight: 500 }}>
+                ✓ Verified by Phoenix AI
+              </div>
+            )}
+            <span style={{ fontSize: 11, padding: "3px 10px", background: T.warmSand, border: `1px solid ${T.borderWarm}`, color: T.charcoalWarm, borderRadius: 20, fontWeight: 500 }}>{userPlan.toUpperCase()}</span>
             <button onClick={() => { setUser(null); setPage("login"); setResult(null); }}
               style={{ padding: "7px 16px", background: "transparent", border: `1px solid ${T.borderWarm}`, borderRadius: 8, color: T.oliveGray, cursor: "pointer", fontSize: 14, fontFamily: "inherit" }}>
               Sign out
@@ -507,62 +585,64 @@ export default function App() {
               </p>
             </div>
 
-            {/* Scan Type Tabs */}
+            {/* Scan limit warning */}
+            {userPlan === "Free" && monthlyScans >= 2 && monthlyScans < 3 && (
+              <div style={{ background: "rgba(201,100,66,0.06)", border: `1px solid rgba(201,100,66,0.2)`, borderRadius: 12, padding: "14px 20px", marginBottom: 24, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div style={{ fontSize: 14, color: T.charcoalWarm }}>⚠️ You have <strong>1 scan remaining</strong> this month on Free plan.</div>
+                <button onClick={() => setActivePage("plans")} style={{ padding: "7px 16px", background: T.terracotta, border: "none", borderRadius: 8, color: T.ivory, cursor: "pointer", fontSize: 13, fontFamily: "inherit", fontWeight: 500 }}>Upgrade →</button>
+              </div>
+            )}
+
+            {/* Tabs */}
             <div style={{ display: "flex", marginBottom: 32, border: `1px solid ${T.borderWarm}`, borderRadius: 12, overflow: "hidden", background: T.ivory }}>
-              {SCAN_TABS.map(([tab, label]) => (
-                <button key={tab} onClick={() => { setScanTab(tab); setResult(null); setScanId(null); }}
-                  style={{ flex: 1, padding: "14px 8px", background: scanTab === tab ? T.nearBlack : "transparent", border: "none", borderRight: `1px solid ${T.borderWarm}`, color: scanTab === tab ? T.ivory : T.oliveGray, cursor: "pointer", fontSize: 13, fontFamily: "inherit", fontWeight: scanTab === tab ? 500 : 400, transition: "all 0.15s", whiteSpace: "nowrap" }}>
-                  {label}
-                </button>
-              ))}
+              {SCAN_TABS.map(([tab, label]) => {
+                const locked = !canUseScanType(tab);
+                return (
+                  <button key={tab} onClick={() => { setScanTab(tab); setResult(null); setScanId(null); }}
+                    style={{ flex: 1, padding: "14px 8px", background: scanTab === tab ? T.nearBlack : "transparent", border: "none", borderRight: `1px solid ${T.borderWarm}`, color: scanTab === tab ? T.ivory : locked ? T.warmSand : T.oliveGray, cursor: "pointer", fontSize: 13, fontFamily: "inherit", fontWeight: scanTab === tab ? 500 : 400, transition: "all 0.15s", whiteSpace: "nowrap", position: "relative" }}>
+                    {label}{locked && " 🔒"}
+                  </button>
+                );
+              })}
             </div>
 
             {/* Input */}
-            <div style={{ background: T.ivory, border: `1px solid ${T.borderWarm}`, borderRadius: 16, padding: 36, marginBottom: 36, boxShadow: "rgba(0,0,0,0.03) 0px 4px 24px" }}>
-              <div style={{ fontSize: 12, color: T.stoneGray, letterSpacing: "0.5px", textTransform: "uppercase", marginBottom: 20 }}>
-                {SCAN_TABS.find(t => t[0] === scanTab)?.[2]}
-              </div>
+            {!loading && (
+              <div style={{ background: T.ivory, border: `1px solid ${T.borderWarm}`, borderRadius: 16, padding: 36, marginBottom: 36, boxShadow: "rgba(0,0,0,0.03) 0px 4px 24px" }}>
+                <div style={{ fontSize: 12, color: T.stoneGray, letterSpacing: "0.5px", textTransform: "uppercase", marginBottom: 20 }}>
+                  {SCAN_TABS.find(t => t[0] === scanTab)?.[2]}
+                </div>
 
-              {(scanTab === "url" || scanTab === "api") && (
-                <>
+                {(scanTab === "url" || scanTab === "api") && (<>
                   <label style={labelStyle}>{scanTab === "api" ? "API Base URL" : "Target URL"}</label>
                   <input value={url} onChange={e => setUrl(e.target.value)} placeholder={scanTab === "api" ? "https://api.example.com" : "https://example.com"} style={{ ...inputStyle, fontSize: 16, marginBottom: 0 }} />
-                </>
-              )}
+                </>)}
 
-              {scanTab === "code" && (
-                <>
+                {scanTab === "code" && (<>
                   <label style={labelStyle}>Source Code</label>
                   <textarea value={code} onChange={e => setCode(e.target.value)} placeholder="// Paste source code..." rows={12} style={{ ...inputStyle, marginBottom: 0, resize: "vertical", lineHeight: 1.7, fontFamily: "monospace", fontSize: 13 }} />
-                </>
-              )}
+                </>)}
 
-              {scanTab === "zip" && (
-                <>
+                {scanTab === "zip" && (<>
                   <label style={labelStyle}>Upload ZIP Archive</label>
-                  <div style={{ border: `2px dashed ${T.borderWarm}`, borderRadius: 12, padding: "48px", textAlign: "center", cursor: "pointer", background: T.parchment }}
-                    onClick={() => document.getElementById("zipInput").click()}>
+                  <div style={{ border: `2px dashed ${T.borderWarm}`, borderRadius: 12, padding: "48px", textAlign: "center", cursor: "pointer", background: T.parchment }} onClick={() => document.getElementById("zipInput").click()}>
                     <div style={{ fontSize: 36, marginBottom: 12 }}>📦</div>
                     <div style={{ fontSize: 16, color: T.charcoalWarm, fontFamily: "Georgia, serif", marginBottom: 6 }}>{zipFile ? zipFile.name : "Click to select ZIP"}</div>
                     <div style={{ fontSize: 13, color: T.stoneGray }}>Python, JS, PHP, Java, Go, TypeScript</div>
                     <input id="zipInput" type="file" accept=".zip" style={{ display: "none" }} onChange={e => setZipFile(e.target.files[0])} />
                   </div>
                   {zipFile && <div style={{ marginTop: 12, padding: "10px 16px", background: T.warmSand, border: `1px solid ${T.borderWarm}`, borderRadius: 8, display: "flex", justifyContent: "space-between" }}><span style={{ fontSize: 14, color: T.charcoalWarm }}>📦 {zipFile.name}</span><span style={{ fontSize: 12, color: T.stoneGray }}>{(zipFile.size / 1024).toFixed(1)} KB</span></div>}
-                </>
-              )}
+                </>)}
 
-              {scanTab === "threat" && (
-                <>
+                {scanTab === "threat" && (<>
                   <label style={labelStyle}>Target URL or IP</label>
                   <input value={url} onChange={e => setUrl(e.target.value)} placeholder="https://example.com or 8.8.8.8" style={{ ...inputStyle, fontSize: 16, marginBottom: 12 }} />
                   <div style={{ padding: "12px 16px", background: T.parchment, border: `1px solid ${T.borderCream}`, borderRadius: 10, fontSize: 13, color: T.oliveGray }}>
-                    AbuseIPDB · CVE Database · Blacklist · SSL Expiry · Port Scan · Subdomains
+                    AbuseIPDB · CVE Database · Blacklist · SSL · Ports · Subdomains
                   </div>
-                </>
-              )}
+                </>)}
 
-              {scanTab === "live" && (
-                <>
+                {scanTab === "live" && (<>
                   <label style={labelStyle}>Target App URL</label>
                   <input value={url} onChange={e => setUrl(e.target.value)} placeholder="https://example.com" style={{ ...inputStyle, fontSize: 16 }} />
                   <label style={labelStyle}>Login URL <span style={{ textTransform: "none", fontSize: 11 }}>(optional)</span></label>
@@ -571,19 +651,50 @@ export default function App() {
                     <div><label style={labelStyle}>Email</label><input value={loginEmail} onChange={e => setLoginEmail(e.target.value)} placeholder="admin@example.com" style={{ ...inputStyle, marginBottom: 0 }} /></div>
                     <div><label style={labelStyle}>Password</label><input value={loginPass} onChange={e => setLoginPass(e.target.value)} placeholder="••••••••" type="password" style={{ ...inputStyle, marginBottom: 0 }} /></div>
                   </div>
-                </>
-              )}
+                </>)}
 
-              <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 24, paddingTop: 24, borderTop: `1px solid ${T.borderCream}` }}>
-                <button onClick={submitScan} disabled={loading}
-                  style={{ padding: "12px 32px", background: loading ? T.warmSand : T.terracotta, border: "none", borderRadius: 10, color: loading ? T.stoneGray : T.ivory, fontSize: 15, fontWeight: 500, cursor: loading ? "not-allowed" : "pointer", fontFamily: "Georgia, serif", transition: "all 0.2s" }}>
-                  {loading ? "Scanning…" : "Start scan →"}
-                </button>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 24, paddingTop: 24, borderTop: `1px solid ${T.borderCream}` }}>
+                  {userPlan?.toUpperCase() === "FREE" && (
+                    <div style={{ fontSize: 13, color: T.stoneGray }}>
+                      {3 - monthlyScans} scan{3 - monthlyScans !== 1 ? "s" : ""} remaining this month
+                    </div>
+                  )}
+                  <div style={{ marginLeft: "auto" }}>
+                    {isLimitReached() ? (
+                      <button onClick={() => { setUpgradeReason("limit"); setShowUpgrade(true); }}
+                        style={{ padding: "12px 32px", background: T.terracotta, border: "none", borderRadius: 10, color: T.ivory, fontSize: 15, fontWeight: 500, cursor: "pointer", fontFamily: "Georgia, serif" }}>
+                        Upgrade to scan →
+                      </button>
+                    ) : (
+                      <button onClick={submitScan}
+                        style={{ padding: "12px 32px", background: T.terracotta, border: "none", borderRadius: 10, color: T.ivory, fontSize: 15, fontWeight: 500, cursor: "pointer", fontFamily: "Georgia, serif", transition: "all 0.2s" }}>
+                        Start scan →
+                      </button>
+                    )}
+                  </div>
+                </div>
               </div>
-            </div>
+            )}
 
-            {/* Results */}
-            {result && (
+            {/* LOADING */}
+            {loading && (
+              <div style={{ background: T.ivory, border: `1px solid ${T.borderWarm}`, borderRadius: 16, padding: "48px 40px", marginBottom: 32, textAlign: "center", boxShadow: "rgba(0,0,0,0.03) 0px 4px 24px" }}>
+                <div style={{ display: "flex", justifyContent: "center", gap: 10, marginBottom: 32 }}>
+                  {[0, 1, 2, 3, 4].map(i => (
+                    <div key={i} style={{ width: 10, height: 10, borderRadius: "50%", background: T.terracotta, animation: "bounce 1.2s ease-in-out infinite", animationDelay: `${i * 0.15}s` }} />
+                  ))}
+                </div>
+                <div style={{ fontSize: 22, fontWeight: 500, color: T.nearBlack, fontFamily: "Georgia, serif", marginBottom: 8 }}>Scanning in progress</div>
+                <div style={{ fontSize: 15, color: T.terracotta, marginBottom: 32, minHeight: 24, fontFamily: "system-ui" }}>{loadingMsg}</div>
+                <div style={{ maxWidth: 400, margin: "0 auto 12px", height: 6, background: T.warmSand, borderRadius: 3, overflow: "hidden" }}>
+                  <div style={{ height: "100%", width: `${loadingProgress}%`, background: `linear-gradient(90deg, ${T.terracotta}, ${T.coral})`, borderRadius: 3, transition: "width 0.8s ease" }} />
+                </div>
+                <div style={{ fontSize: 13, color: T.stoneGray }}>{Math.round(loadingProgress)}% complete · This may take 30–60 seconds</div>
+              </div>
+            )}
+
+            {/* RESULTS */}
+            {result && !loading && (
               <div>
                 {result.scanned_files?.length > 0 && (
                   <div style={{ background: T.ivory, border: `1px solid ${T.borderWarm}`, borderRadius: 12, padding: 20, marginBottom: 20 }}>
@@ -622,10 +733,30 @@ export default function App() {
                   ))}
                 </div>
 
-                <button onClick={() => downloadReport(result, url || zipFile?.name || "Source Code", scanId)}
-                  style={{ width: "100%", padding: "13px", background: T.warmSand, border: `1px solid ${T.borderWarm}`, borderRadius: 10, color: T.charcoalWarm, cursor: "pointer", fontSize: 14, fontFamily: "inherit", fontWeight: 500, marginBottom: 24 }}>
-                  Download PDF Report
-                </button>
+                {/* Download - only full for Pro+ */}
+                {userPlan === "Free" ? (
+                  <div style={{ background: T.parchment, border: `1px solid ${T.borderWarm}`, borderRadius: 12, padding: "20px 24px", marginBottom: 24, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div>
+                      <div style={{ fontSize: 14, color: T.charcoalWarm, fontWeight: 500, marginBottom: 4 }}>Quick Report Available</div>
+                      <div style={{ fontSize: 13, color: T.stoneGray }}>Upgrade to Pro for full PDF reports with AI analysis and PoC details.</div>
+                    </div>
+                    <div style={{ display: "flex", gap: 10 }}>
+                      <button onClick={() => downloadReport(result, url || "Source Code", scanId)}
+                        style={{ padding: "8px 16px", background: T.warmSand, border: `1px solid ${T.borderWarm}`, borderRadius: 8, color: T.charcoalWarm, cursor: "pointer", fontSize: 13, fontFamily: "inherit" }}>
+                        Basic Report
+                      </button>
+                      <button onClick={() => { setUpgradeReason("limit"); setShowUpgrade(true); }}
+                        style={{ padding: "8px 16px", background: T.terracotta, border: "none", borderRadius: 8, color: T.ivory, cursor: "pointer", fontSize: 13, fontFamily: "Georgia, serif", fontWeight: 500 }}>
+                        Get Full PDF →
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button onClick={() => downloadReport(result, url || zipFile?.name || "Source Code", scanId)}
+                    style={{ width: "100%", padding: "13px", background: T.warmSand, border: `1px solid ${T.borderWarm}`, borderRadius: 10, color: T.charcoalWarm, cursor: "pointer", fontSize: 14, fontFamily: "inherit", fontWeight: 500, marginBottom: 24 }}>
+                    Download Full PDF Report
+                  </button>
+                )}
 
                 {result.ai_explanation && (
                   <div style={{ background: T.nearBlack, border: `1px solid ${T.borderDark}`, borderRadius: 16, padding: 32, marginBottom: 24 }}>
@@ -639,12 +770,19 @@ export default function App() {
                   <div key={i} style={{ background: T.ivory, borderLeft: `3px solid ${sColor(f.severity)}`, borderRadius: "0 12px 12px 0", padding: "20px 24px", marginBottom: 12, boxShadow: "rgba(0,0,0,0.03) 0px 2px 8px", border: `1px solid ${T.borderCream}` }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10, flexWrap: "wrap", gap: 10 }}>
                       <span style={{ fontSize: 16, color: T.nearBlack, fontWeight: 500, fontFamily: "Georgia, serif" }}>{f.type}</span>
-                      <span style={{ fontSize: 11, padding: "3px 12px", background: T.warmSand, color: sColor(f.severity), border: `1px solid ${T.borderWarm}`, borderRadius: 20, fontWeight: 500, letterSpacing: "0.3px", textTransform: "uppercase" }}>{f.severity}</span>
+                      <span style={{ fontSize: 11, padding: "3px 12px", background: T.warmSand, color: sColor(f.severity), border: `1px solid ${T.borderWarm}`, borderRadius: 20, fontWeight: 500, textTransform: "uppercase" }}>{f.severity}</span>
                     </div>
                     {f.file && <div style={{ fontSize: 12, color: T.stoneGray, marginBottom: 6, fontFamily: "monospace" }}>📁 {f.file}</div>}
-                    <p style={{ fontSize: 14, color: T.oliveGray, margin: "0 0 8px 0", lineHeight: 1.6 }}>{f.detail}</p>
+                    <p style={{ fontSize: 14, color: T.oliveGray, margin: "0 0 8px", lineHeight: 1.6 }}>{f.detail}</p>
                     <p style={{ fontSize: 13, color: "#2d6a4f", margin: 0 }}>✓ {f.fix}</p>
-                    {f.poc && <div style={{ fontSize: 12, color: T.stoneGray, marginTop: 10, padding: "8px 12px", background: T.parchment, borderRadius: 8, lineHeight: 1.6, fontFamily: "monospace", border: `1px solid ${T.borderCream}` }}>{f.poc}</div>}
+                    {f.poc && userPlan !== "Free" && (
+                      <div style={{ fontSize: 12, color: T.stoneGray, marginTop: 10, padding: "8px 12px", background: T.parchment, borderRadius: 8, lineHeight: 1.6, fontFamily: "monospace", border: `1px solid ${T.borderCream}` }}>{f.poc}</div>
+                    )}
+                    {f.poc && userPlan === "Free" && (
+                      <div style={{ fontSize: 12, color: T.warmSilver, marginTop: 10, padding: "8px 12px", background: T.warmSand, borderRadius: 8, border: `1px solid ${T.borderWarm}` }}>
+                        🔒 PoC details available on Pro plan
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -668,20 +806,18 @@ export default function App() {
                   <div style={{ fontSize: 13, color: T.stoneGray }}>{scan.created_at?.slice(0, 16).replace("T", " ")} · {scan.scan_type?.toUpperCase()}</div>
                 </div>
                 <div style={{ display: "flex", gap: 20, alignItems: "center" }}>
-                  {scan.result && (
-                    <>
-                      <div style={{ textAlign: "right" }}>
-                        <div style={{ fontSize: 28, fontWeight: 500, color: (scan.result.risk_score ?? 0) > 70 ? T.errorCrimson : "#2d6a4f", fontFamily: "Georgia, serif", lineHeight: 1 }}>{scan.result.risk_score ?? 0}</div>
-                        <div style={{ fontSize: 10, color: T.stoneGray, letterSpacing: "0.5px", textTransform: "uppercase", marginTop: 2 }}>Risk</div>
-                      </div>
-                      <div style={{ width: 1, height: 40, background: T.borderCream }} />
-                      <div><div style={{ fontSize: 13, color: T.terracotta }}>H: {scan.result.high ?? 0}</div><div style={{ fontSize: 13, color: T.oliveGray }}>M: {scan.result.medium ?? 0}</div></div>
-                      <button onClick={() => downloadReport(scan.result, scan.target, scan.id)}
-                        style={{ padding: "8px 20px", background: T.warmSand, border: `1px solid ${T.borderWarm}`, color: T.charcoalWarm, borderRadius: 8, cursor: "pointer", fontSize: 13, fontFamily: "inherit", fontWeight: 500 }}>
-                        Download PDF
-                      </button>
-                    </>
-                  )}
+                  {scan.result && (<>
+                    <div style={{ textAlign: "right" }}>
+                      <div style={{ fontSize: 28, fontWeight: 500, color: (scan.result.risk_score ?? 0) > 70 ? T.errorCrimson : "#2d6a4f", fontFamily: "Georgia, serif", lineHeight: 1 }}>{scan.result.risk_score ?? 0}</div>
+                      <div style={{ fontSize: 10, color: T.stoneGray, letterSpacing: "0.5px", textTransform: "uppercase", marginTop: 2 }}>Risk</div>
+                    </div>
+                    <div style={{ width: 1, height: 40, background: T.borderCream }} />
+                    <div><div style={{ fontSize: 13, color: T.terracotta }}>H: {scan.result.high ?? 0}</div><div style={{ fontSize: 13, color: T.oliveGray }}>M: {scan.result.medium ?? 0}</div></div>
+                    <button onClick={() => downloadReport(scan.result, scan.target, scan.id)}
+                      style={{ padding: "8px 20px", background: T.warmSand, border: `1px solid ${T.borderWarm}`, color: T.charcoalWarm, borderRadius: 8, cursor: "pointer", fontSize: 13, fontFamily: "inherit", fontWeight: 500 }}>
+                      {userPlan === "Free" ? "Basic Report" : "Download PDF"}
+                    </button>
+                  </>)}
                 </div>
               </div>
             ))}
@@ -696,7 +832,7 @@ export default function App() {
               <h1 style={{ fontSize: 52, fontWeight: 500, color: T.nearBlack, margin: 0, fontFamily: "Georgia, serif", letterSpacing: "-1px" }}>Security dashboard</h1>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 16, marginBottom: 32 }}>
-              {[["Total Scans", history.length || 0], ["Critical Issues", history.filter(s => (s.result?.high ?? 0) > 0).length || 0], ["Assets", 3], ["Team", 1], ["Plan", userPlan], ["Reports", history.length || 0]].map(([l, v]) => (
+              {[["Total Scans", history.length || 0], ["Critical Issues", history.filter(s => (s.result?.high ?? 0) > 0).length || 0], ["Assets", 3], ["Team", userPlan === "Enterprise" || userPlan === "ENTERPRISE" ? "Up to 5" : 1], ["Plan", userPlan], ["Reports", history.length || 0]].map(([l, v]) => (
                 <div key={l} style={{ background: T.ivory, border: `1px solid ${T.borderCream}`, borderRadius: 14, padding: "24px 28px" }}>
                   <div style={{ fontSize: 11, color: T.stoneGray, letterSpacing: "0.5px", textTransform: "uppercase", marginBottom: 10 }}>{l}</div>
                   <div style={{ fontSize: 36, fontWeight: 500, color: T.nearBlack, fontFamily: "Georgia, serif", lineHeight: 1 }}>{v}</div>
@@ -718,6 +854,17 @@ export default function App() {
                 </div>
               ))}
             </div>
+
+            {/* Enterprise team section */}
+            {(userPlan === "Enterprise" || userPlan === "ENTERPRISE") && (
+              <div style={{ background: T.ivory, border: `1px solid ${T.borderCream}`, borderRadius: 16, padding: 28 }}>
+                <div style={{ fontSize: 16, fontWeight: 500, color: T.nearBlack, fontFamily: "Georgia, serif", marginBottom: 8 }}>Team Members</div>
+                <div style={{ fontSize: 13, color: T.stoneGray, marginBottom: 20 }}>You can add up to 5 team members on Enterprise plan.</div>
+                <button style={{ padding: "10px 20px", background: T.terracotta, border: "none", borderRadius: 8, color: T.ivory, cursor: "pointer", fontSize: 14, fontFamily: "Georgia, serif", fontWeight: 500 }}>
+                  + Invite Team Member
+                </button>
+              </div>
+            )}
           </div>
         )}
 
@@ -731,8 +878,9 @@ export default function App() {
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 24, marginBottom: 48 }}>
               {PLANS.map((plan, i) => (
-                <div key={plan.name} style={{ background: plan.popular ? T.nearBlack : T.ivory, border: `1px solid ${plan.popular ? T.borderDark : T.borderWarm}`, borderRadius: 20, padding: 36, position: "relative", opacity: mounted ? 1 : 0, transform: mounted ? "translateY(0)" : "translateY(20px)", transition: `all 0.4s ease ${i * 0.08}s`, boxShadow: plan.popular ? "rgba(0,0,0,0.12) 0px 8px 32px" : "rgba(0,0,0,0.04) 0px 2px 12px" }}>
+                <div key={plan.name} style={{ background: plan.popular ? T.nearBlack : T.ivory, border: `2px solid ${userPlan === plan.name ? T.terracotta : plan.popular ? T.borderDark : T.borderWarm}`, borderRadius: 20, padding: 36, position: "relative", opacity: mounted ? 1 : 0, transform: mounted ? "translateY(0)" : "translateY(20px)", transition: `all 0.4s ease ${i * 0.08}s`, boxShadow: plan.popular ? "rgba(0,0,0,0.12) 0px 8px 32px" : "rgba(0,0,0,0.04) 0px 2px 12px" }}>
                   {plan.popular && <div style={{ position: "absolute", top: -12, left: "50%", transform: "translateX(-50%)", background: T.terracotta, color: T.ivory, fontSize: 11, fontWeight: 500, padding: "4px 16px", borderRadius: 20, letterSpacing: "0.5px", whiteSpace: "nowrap", textTransform: "uppercase" }}>Most popular</div>}
+                  {userPlan === plan.name && <div style={{ position: "absolute", top: 16, right: 16, fontSize: 11, color: T.terracotta, fontWeight: 500, background: "rgba(201,100,66,0.1)", padding: "3px 10px", borderRadius: 20 }}>Current</div>}
                   <div style={{ fontSize: 11, color: plan.popular ? T.terracotta : T.stoneGray, letterSpacing: "0.5px", textTransform: "uppercase", marginBottom: 16 }}>{plan.name}</div>
                   <div style={{ fontSize: 48, fontWeight: 500, color: plan.popular ? T.ivory : T.nearBlack, fontFamily: "Georgia, serif", lineHeight: 1, marginBottom: 4 }}>{plan.price}</div>
                   <div style={{ fontSize: 14, color: plan.popular ? T.stoneGray : T.oliveGray, marginBottom: 28 }}>{plan.period}</div>
@@ -742,9 +890,9 @@ export default function App() {
                       <span style={{ color: T.terracotta, flexShrink: 0 }}>✓</span>{f}
                     </div>
                   ))}
-                  <button onClick={() => setUserPlan(plan.name)}
-                    style={{ width: "100%", marginTop: 28, padding: "13px", background: userPlan === plan.name ? T.terracotta : plan.popular ? "rgba(250,249,245,0.08)" : T.warmSand, border: `1px solid ${userPlan === plan.name ? T.terracotta : plan.popular ? T.borderDark : T.borderWarm}`, borderRadius: 10, color: userPlan === plan.name ? T.ivory : plan.popular ? T.ivory : T.charcoalWarm, cursor: "pointer", fontSize: 15, fontFamily: "Georgia, serif", fontWeight: 500, transition: "all 0.2s" }}>
-                    {userPlan === plan.name ? "Current plan" : "Get started →"}
+                  <button onClick={() => { if (userPlan !== plan.name) alert(`Contact us to upgrade to ${plan.name} plan!`); }}
+                    style={{ width: "100%", marginTop: 28, padding: "13px", background: userPlan === plan.name ? T.terracotta : plan.popular ? "rgba(250,249,245,0.08)" : T.warmSand, border: `1px solid ${userPlan === plan.name ? T.terracotta : plan.popular ? T.borderDark : T.borderWarm}`, borderRadius: 10, color: userPlan === plan.name ? T.ivory : plan.popular ? T.ivory : T.charcoalWarm, cursor: userPlan === plan.name ? "default" : "pointer", fontSize: 15, fontFamily: "Georgia, serif", fontWeight: 500 }}>
+                    {userPlan === plan.name ? "✓ Current plan" : "Get started →"}
                   </button>
                 </div>
               ))}
@@ -760,6 +908,13 @@ export default function App() {
         )}
 
       </main>
+
+      <style>{`
+        @keyframes bounce {
+          0%, 100% { transform: translateY(0); opacity: 0.4; }
+          50% { transform: translateY(-12px); opacity: 1; }
+        }
+      `}</style>
     </div>
   );
 }
