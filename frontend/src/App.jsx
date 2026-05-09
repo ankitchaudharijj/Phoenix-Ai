@@ -133,7 +133,7 @@ export default function App() {
     return () => { clearInterval(msgInt); clearInterval(progInt); };
   }, [loading, scanTab]);
 
-  const API = phoenix-ai-production.up.railway.app
+  const API = "http://127.0.0.1:8000";
 
   const getPlanObj = (planName) => {
   const normalized = planName?.toUpperCase();
