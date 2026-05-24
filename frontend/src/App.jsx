@@ -128,7 +128,7 @@ export default function App() {
     return () => { clearInterval(msgInt); clearInterval(progInt); };
   }, [loading, scanTab]);
 
-  const API = "https://phoenix-ai-production.up.railway.app";
+  const API = "https://phoenix-ai-uq81.onrender.com";
 
   const getPlanObj = (planName) => {
     const n = planName?.toUpperCase();
